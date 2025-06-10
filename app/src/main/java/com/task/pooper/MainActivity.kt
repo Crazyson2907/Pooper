@@ -35,6 +35,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -139,7 +140,11 @@ class PooperViewModel(application: Application) : ViewModel() {
                 currentTask?.let { task ->
                     viewModelScope.launch(Dispatchers.IO) {
                         statsRepo.recordTask(task)
-                        dispatch(PooperIntent.StartBreak)
+
+                        // ✅ Switch back to Main for anything UI-related or CountDownTimer-related
+                        withContext(Dispatchers.Main) {
+                            dispatch(PooperIntent.StartBreak)
+                        }
                     }
                 }
             }
@@ -198,10 +203,36 @@ fun PooperApp(viewModel: PooperViewModel) {
 
 @Composable
 fun OnboardingScreen(onContinue: () -> Unit) {
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
         Text("Welcome to POOPER!", style = MaterialTheme.typography.headlineLarge)
-        Text("Your personal, slightly ridiculous focus timer.")
-        Button(onClick = onContinue) { Text("Let’s Poop") }
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "POOPER stands for: Peak Operational Optimizer for Personal Efficiency Regulation.",
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "This is not your average productivity app. Here’s how to use it:",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("1. Create a task. Think of something you really need to focus on.")
+        Text("2. Set how many minutes you want to work on it.")
+        Text("3. Start the timer and DO NOT get distracted. Be the Pooper.")
+        Text("4. When the timer ends, you’ll get a break. Enjoy it.")
+        Text("5. Your completed tasks get tracked in the Pooping Stats.")
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("This app is scientifically unscientific and spiritually focused.", style = MaterialTheme.typography.bodySmall)
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onContinue) {
+            Text("Let’s Poop")
+        }
     }
 }
 

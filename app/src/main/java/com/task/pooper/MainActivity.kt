@@ -3,19 +3,14 @@ package com.task.pooper
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.task.pooper.ui.theme.PooperTheme
 import android.app.*
 import android.content.Context
 import android.os.CountDownTimer
-import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -40,6 +35,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.task.pooper.PooperState.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,16 +56,19 @@ sealed class PooperIntent {
     data class CreateTask(val name: String, val durationMinutes: Int) : PooperIntent()
     object StartBreak : PooperIntent()
     object EndBreak : PooperIntent()
+    data class EndBreakToTask(val task: FocusTask) : PooperIntent()
     object LoadStats : PooperIntent()
     object Tick : PooperIntent()
     object TaskFinished : PooperIntent()
+    object InterruptBreak : PooperIntent()
+    object ShowStats : PooperIntent()
 }
 
 sealed class PooperState {
     object Onboarding : PooperState()
     object CreatingTask : PooperState()
     data class ActiveTask(val task: FocusTask) : PooperState()
-    data class OnBreak(val remainingTime: Int) : PooperState()
+    data class OnBreak(val remainingTime: Int, val returnToTask: FocusTask?) : PooperState()
     data class Stats(val stats: TaskStats) : PooperState()
 }
 
@@ -130,6 +129,7 @@ class PooperViewModel(application: Application) : ViewModel() {
     private val statsRepo = StatsRepository(application.applicationContext)
     private var timer: CountDownTimer? = null
     private var isBreak = false
+    private var breakFromUnfinishedTask = false
 
     fun dispatch(intent: PooperIntent) {
         when (intent) {
@@ -137,7 +137,7 @@ class PooperViewModel(application: Application) : ViewModel() {
                 isBreak = false
                 val task = FocusTask(name = intent.name, remainingTime = intent.durationMinutes * 60, duration = intent.durationMinutes * 60)
                 currentTask = task
-                _state.value = PooperState.ActiveTask(task)
+                _state.value = ActiveTask(task)
                 startTimer(task.remainingTime) {
                     dispatch(PooperIntent.TaskFinished)
                 }
@@ -145,12 +145,13 @@ class PooperViewModel(application: Application) : ViewModel() {
             PooperIntent.Tick -> {
                 if (isBreak) {
                     currentBreakTime -= 1
-                    _state.value = PooperState.OnBreak(currentBreakTime)
+                    val returnTask = if (breakFromUnfinishedTask) currentTask else null
+                    _state.value = OnBreak(currentBreakTime, returnTask)
                 } else {
                     currentTask?.let {
                         val updatedTask = it.copy(remainingTime = it.remainingTime - 1)
                         currentTask = updatedTask
-                        _state.value = PooperState.ActiveTask(updatedTask)
+                        _state.value = ActiveTask(updatedTask)
                     }
                 }
             }
@@ -159,6 +160,7 @@ class PooperViewModel(application: Application) : ViewModel() {
                     viewModelScope.launch(Dispatchers.IO) {
                         statsRepo.recordTask(task)
                         withContext(Dispatchers.Main) {
+                            currentTask = null
                             dispatch(PooperIntent.StartBreak)
                         }
                     }
@@ -167,20 +169,39 @@ class PooperViewModel(application: Application) : ViewModel() {
             PooperIntent.StartBreak -> {
                 isBreak = true
                 currentBreakTime = 300
-                _state.value = PooperState.OnBreak(currentBreakTime)
+                val returnTask = if ((currentTask?.remainingTime ?: 0) > 0) currentTask else null
+                breakFromUnfinishedTask = returnTask != null
+                _state.value = OnBreak(currentBreakTime, returnTask)
                 startTimer(currentBreakTime) {
                     dispatch(PooperIntent.EndBreak)
                 }
             }
             PooperIntent.EndBreak -> {
                 timer?.cancel()
-                _state.value = PooperState.CreatingTask
+                isBreak = false
+                if (breakFromUnfinishedTask && currentTask != null) {
+                    _state.value = ActiveTask(currentTask!!)
+                } else {
+                    _state.value = PooperState.CreatingTask
+                }
+                breakFromUnfinishedTask = false
             }
-            PooperIntent.LoadStats -> {
+            PooperIntent.InterruptBreak -> {
+                timer?.cancel()
+                dispatch(PooperIntent.EndBreak)
+            }
+            PooperIntent.LoadStats, PooperIntent.ShowStats -> {
                 viewModelScope.launch(Dispatchers.IO) {
                     val stats = statsRepo.getStats()
-                    _state.value = PooperState.Stats(stats)
+                    _state.value = Stats(stats)
                 }
+            }
+
+            is PooperIntent.EndBreakToTask -> {
+                timer?.cancel()
+                isBreak = false
+                currentTask = intent.task
+                _state.value = ActiveTask(intent.task)
             }
         }
     }
@@ -202,9 +223,14 @@ class PooperViewModel(application: Application) : ViewModel() {
 fun PooperApp(viewModel: PooperViewModel) {
     when (val currentState = viewModel.state.value) {
         is PooperState.Onboarding -> OnboardingScreen { viewModel.dispatch(PooperIntent.EndBreak) }
-        is PooperState.CreatingTask -> TaskCreationScreen { name, mins ->
-            viewModel.dispatch(PooperIntent.CreateTask(name, mins))
-        }
+        is PooperState.CreatingTask -> TaskCreationScreen(
+            onTaskCreated = { name, mins ->
+                viewModel.dispatch(PooperIntent.CreateTask(name, mins))
+            },
+            onShowStats = {
+                viewModel.dispatch(PooperIntent.ShowStats)
+            }
+        )
         is PooperState.ActiveTask -> {
             LaunchedEffect(currentState.task.remainingTime) {}
             FocusTimerScreen(currentState.task.name, currentState.task.remainingTime) {
@@ -215,11 +241,20 @@ fun PooperApp(viewModel: PooperViewModel) {
         }
         is PooperState.OnBreak -> {
             LaunchedEffect(currentState.remainingTime) {}
-            BreakScreen(currentState.remainingTime) {
-                viewModel.dispatch(PooperIntent.EndBreak)
+            BreakScreen(
+                remainingTime = currentState.remainingTime,
+                returnToTask = currentState.returnToTask
+            ) { task ->
+                if (task != null) {
+                    viewModel.dispatch(PooperIntent.EndBreakToTask(task))
+                } else {
+                    viewModel.dispatch(PooperIntent.EndBreak)
+                }
             }
         }
-        is PooperState.Stats -> StatsScreen(currentState.stats)
+        is PooperState.Stats -> StatsScreen(currentState.stats) {
+            viewModel.dispatch(PooperIntent.EndBreak)
+        }
     }
 }
 
@@ -272,7 +307,10 @@ fun OnboardingScreen(onContinue: () -> Unit) {
 }
 
 @Composable
-fun TaskCreationScreen(onTaskCreated: (String, Int) -> Unit) {
+fun TaskCreationScreen(
+    onTaskCreated: (String, Int) -> Unit,
+    onShowStats: () -> Unit
+) {
     var taskName by remember { mutableStateOf("") }
     var duration by remember { mutableStateOf("25") }
     Column(
@@ -301,6 +339,10 @@ fun TaskCreationScreen(onTaskCreated: (String, Int) -> Unit) {
         Button(onClick = { onTaskCreated(taskName, duration.toIntOrNull() ?: 25) }) {
             Text("Start Task")
         }
+
+        Button(onClick = { onShowStats() }) {
+            Text("Show stats")
+        }
     }
 }
 
@@ -324,7 +366,7 @@ fun FocusTimerScreen(taskName: String, remainingTime: Int, onFinish: () -> Unit)
 }
 
 @Composable
-fun BreakScreen(remainingTime: Int, onBreakFinished: () -> Unit) {
+fun BreakScreen(remainingTime: Int, returnToTask: FocusTask?, onBreakFinished: (FocusTask?) -> Unit, ) {
     Column(
         Modifier
             .fillMaxSize()
@@ -336,12 +378,14 @@ fun BreakScreen(remainingTime: Int, onBreakFinished: () -> Unit) {
         Spacer(modifier = Modifier.height(8.dp))
         Text("Remaining: ${remainingTime / 60}:${(remainingTime % 60).toString().padStart(2, '0')}", fontSize = 28.sp)
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = onBreakFinished) { Text("End Break") }
+        Button(onClick = { onBreakFinished(returnToTask) }) {
+            Text("End Break")
+        }
     }
 }
 
 @Composable
-fun StatsScreen(stats: TaskStats) {
+fun StatsScreen(stats: TaskStats, endBrake: () -> Unit) {
     Column(
         Modifier
             .fillMaxSize()

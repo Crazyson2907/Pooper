@@ -11,18 +11,27 @@ import androidx.compose.ui.Modifier
 import android.app.*
 import android.content.Context
 import android.os.CountDownTimer
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
@@ -87,7 +96,11 @@ data class TaskRecord(
     val durationMinutes: Int
 )
 
-data class TaskStats(val taskCount: Int = 0, val totalMinutes: Int = 0, val completedTasks: List<String> = listOf())
+data class TaskStats(
+    val taskCount: Int = 0,
+    val totalMinutes: Int = 0,
+    val completedTasks: List<String> = listOf()
+)
 
 @Dao
 interface TaskDao {
@@ -113,6 +126,13 @@ class StatsRepository(context: Context) {
 
     suspend fun getStats(): TaskStats {
         val records = dao.getAll()
+        val filtered = records.filter { it.name.isNotBlank() }
+
+        return TaskStats(
+            taskCount = filtered.size,
+            totalMinutes = filtered.sumOf { it.durationMinutes },
+            completedTasks = filtered.map { it.name }
+        )
         return TaskStats(
             taskCount = records.size,
             totalMinutes = records.sumOf { it.durationMinutes },
@@ -135,13 +155,18 @@ class PooperViewModel(application: Application) : ViewModel() {
         when (intent) {
             is PooperIntent.CreateTask -> {
                 isBreak = false
-                val task = FocusTask(name = intent.name, remainingTime = intent.durationMinutes * 60, duration = intent.durationMinutes * 60)
+                val task = FocusTask(
+                    name = intent.name,
+                    remainingTime = intent.durationMinutes * 60,
+                    duration = intent.durationMinutes * 60
+                )
                 currentTask = task
                 _state.value = ActiveTask(task)
                 startTimer(task.remainingTime) {
                     dispatch(PooperIntent.TaskFinished)
                 }
             }
+
             PooperIntent.Tick -> {
                 if (isBreak) {
                     currentBreakTime -= 1
@@ -155,6 +180,7 @@ class PooperViewModel(application: Application) : ViewModel() {
                     }
                 }
             }
+
             PooperIntent.TaskFinished -> {
                 currentTask?.let { task ->
                     viewModelScope.launch(Dispatchers.IO) {
@@ -166,6 +192,7 @@ class PooperViewModel(application: Application) : ViewModel() {
                     }
                 }
             }
+
             PooperIntent.StartBreak -> {
                 isBreak = true
                 currentBreakTime = 300
@@ -176,6 +203,7 @@ class PooperViewModel(application: Application) : ViewModel() {
                     dispatch(PooperIntent.EndBreak)
                 }
             }
+
             PooperIntent.EndBreak -> {
                 timer?.cancel()
                 isBreak = false
@@ -186,10 +214,12 @@ class PooperViewModel(application: Application) : ViewModel() {
                 }
                 breakFromUnfinishedTask = false
             }
+
             PooperIntent.InterruptBreak -> {
                 timer?.cancel()
                 dispatch(PooperIntent.EndBreak)
             }
+
             PooperIntent.LoadStats, PooperIntent.ShowStats -> {
                 viewModelScope.launch(Dispatchers.IO) {
                     val stats = statsRepo.getStats()
@@ -212,6 +242,7 @@ class PooperViewModel(application: Application) : ViewModel() {
             override fun onTick(millisUntilFinished: Long) {
                 dispatch(PooperIntent.Tick)
             }
+
             override fun onFinish() {
                 onFinish()
             }
@@ -231,6 +262,7 @@ fun PooperApp(viewModel: PooperViewModel) {
                 viewModel.dispatch(PooperIntent.ShowStats)
             }
         )
+
         is PooperState.ActiveTask -> {
             LaunchedEffect(currentState.task.remainingTime) {}
             FocusTimerScreen(currentState.task.name, currentState.task.remainingTime) {
@@ -239,6 +271,7 @@ fun PooperApp(viewModel: PooperViewModel) {
                 }
             }
         }
+
         is PooperState.OnBreak -> {
             LaunchedEffect(currentState.remainingTime) {}
             BreakScreen(
@@ -252,6 +285,7 @@ fun PooperApp(viewModel: PooperViewModel) {
                 }
             }
         }
+
         is PooperState.Stats -> StatsScreen(currentState.stats) {
             viewModel.dispatch(PooperIntent.EndBreak)
         }
@@ -300,7 +334,16 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(24.dp))
             Button(onClick = onContinue, modifier = Modifier.clip(RoundedCornerShape(10.dp))) {
-                Text("Let’s Poop 💩")
+                Text(
+                    buildAnnotatedString {
+                        append("Let’s ")
+                        withStyle(style = SpanStyle(textDecoration = TextDecoration.LineThrough)) {
+                            append("Poop")
+                        }
+                        append(" Work💩")
+                    },
+                    style = MaterialTheme.typography.bodyLarge
+                )
             }
         }
     }
@@ -313,35 +356,54 @@ fun TaskCreationScreen(
 ) {
     var taskName by remember { mutableStateOf("") }
     var duration by remember { mutableStateOf("25") }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Create a Task", style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = taskName,
-            onValueChange = { taskName = it },
-            label = { Text("Task Name") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
-            value = duration,
-            onValueChange = { duration = it },
-            label = { Text("Duration (min)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { onTaskCreated(taskName, duration.toIntOrNull() ?: 25) }) {
-            Text("Start Task")
+    val context = LocalContext.current
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+                .align(Alignment.TopCenter),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Create a Task", style = MaterialTheme.typography.headlineMedium)
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(
+                value = taskName,
+                onValueChange = { taskName = it },
+                label = { Text("Task Name") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = duration,
+                onValueChange = { duration = it },
+                label = { Text("Duration (min)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
-        Button(onClick = { onShowStats() }) {
-            Text("Show stats")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+                .align(Alignment.BottomCenter),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Button(onClick = onShowStats) {
+                Text("📊 Stats")
+            }
+            Button(onClick = {
+                val trimmedName = taskName.trim()
+                if (trimmedName.isNotEmpty()) {
+                    onTaskCreated(trimmedName, duration.toIntOrNull() ?: 25)
+                } else {
+                    Toast.makeText(context, "Task name cannot be empty 💩", Toast.LENGTH_SHORT).show()
+                }
+            }) {
+                Text("▶️ Start")
+            }
         }
     }
 }
@@ -359,14 +421,21 @@ fun FocusTimerScreen(taskName: String, remainingTime: Int, onFinish: () -> Unit)
         Spacer(modifier = Modifier.height(16.dp))
         Text("Focusing on: $taskName", fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Time left: ${remainingTime / 60}:${(remainingTime % 60).toString().padStart(2, '0')}", fontSize = 32.sp)
+        Text(
+            "Time left: ${remainingTime / 60}:${(remainingTime % 60).toString().padStart(2, '0')}",
+            fontSize = 32.sp
+        )
         Spacer(modifier = Modifier.height(24.dp))
         Button(onClick = onFinish) { Text("Take a Break") }
     }
 }
 
 @Composable
-fun BreakScreen(remainingTime: Int, returnToTask: FocusTask?, onBreakFinished: (FocusTask?) -> Unit, ) {
+fun BreakScreen(
+    remainingTime: Int,
+    returnToTask: FocusTask?,
+    onBreakFinished: (FocusTask?) -> Unit,
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -376,7 +445,10 @@ fun BreakScreen(remainingTime: Int, returnToTask: FocusTask?, onBreakFinished: (
     ) {
         Text("⏸️ Break Time!", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Remaining: ${remainingTime / 60}:${(remainingTime % 60).toString().padStart(2, '0')}", fontSize = 28.sp)
+        Text(
+            "Remaining: ${remainingTime / 60}:${(remainingTime % 60).toString().padStart(2, '0')}",
+            fontSize = 28.sp
+        )
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = { onBreakFinished(returnToTask) }) {
             Text("End Break")
@@ -385,9 +457,11 @@ fun BreakScreen(remainingTime: Int, returnToTask: FocusTask?, onBreakFinished: (
 }
 
 @Composable
-fun StatsScreen(stats: TaskStats, endBrake: () -> Unit) {
+fun StatsScreen(stats: TaskStats, onBack: () -> Unit) {
+    BackHandler { onBack() }
+
     Column(
-        Modifier
+        modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -397,8 +471,15 @@ fun StatsScreen(stats: TaskStats, endBrake: () -> Unit) {
         Text("Total Tasks Completed: ${stats.taskCount}")
         Text("Total Minutes Focused: ${stats.totalMinutes}")
         Text("Tasks Done:", fontWeight = FontWeight.SemiBold)
-        stats.completedTasks.forEach {
-            Text("- $it")
+        Spacer(modifier = Modifier.height(12.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(stats.completedTasks.filter { it.isNotBlank() }) { task ->
+                Text("- $task")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onBack) {
+            Text("Back")
         }
     }
 }

@@ -1,29 +1,43 @@
 package com.task.pooper
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import android.app.*
+import android.app.Application
 import android.content.Context
+import android.os.Bundle
 import android.os.CountDownTimer
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -34,7 +48,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.room.Dao
 import androidx.room.Database
@@ -44,7 +60,9 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import com.task.pooper.PooperState.*
+import com.task.pooper.PooperState.ActiveTask
+import com.task.pooper.PooperState.OnBreak
+import com.task.pooper.PooperState.Stats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,7 +70,10 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val viewModel = PooperViewModel(application)
+
+        val factory = PooperViewModelFactory(application)
+        val viewModel: PooperViewModel by viewModels { factory }
+
         setContent {
             MaterialTheme {
                 PooperApp(viewModel)
@@ -62,6 +83,7 @@ class MainActivity : ComponentActivity() {
 }
 
 sealed class PooperIntent {
+    object FinishOnboarding : PooperIntent()
     data class CreateTask(val name: String, val durationMinutes: Int) : PooperIntent()
     object StartBreak : PooperIntent()
     object EndBreak : PooperIntent()
@@ -141,7 +163,17 @@ class StatsRepository(context: Context) {
     }
 }
 
-class PooperViewModel(application: Application) : ViewModel() {
+class PooperViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(PooperViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return PooperViewModel(application) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+
+    class PooperViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = mutableStateOf<PooperState>(PooperState.Onboarding)
     val state: State<PooperState> = _state
     private var currentTask: FocusTask? = null
@@ -233,6 +265,10 @@ class PooperViewModel(application: Application) : ViewModel() {
                 currentTask = intent.task
                 _state.value = ActiveTask(intent.task)
             }
+
+            PooperIntent.FinishOnboarding -> {
+                _state.value = PooperState.CreatingTask
+            }
         }
     }
 
@@ -253,7 +289,9 @@ class PooperViewModel(application: Application) : ViewModel() {
 @Composable
 fun PooperApp(viewModel: PooperViewModel) {
     when (val currentState = viewModel.state.value) {
-        is PooperState.Onboarding -> OnboardingScreen { viewModel.dispatch(PooperIntent.EndBreak) }
+        is PooperState.Onboarding -> OnboardingScreen {
+        viewModel.dispatch(PooperIntent.FinishOnboarding)
+    }
         is PooperState.CreatingTask -> TaskCreationScreen(
             onTaskCreated = { name, mins ->
                 viewModel.dispatch(PooperIntent.CreateTask(name, mins))

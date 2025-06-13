@@ -401,7 +401,7 @@ fun TaskCreationScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(24.dp)
-                .align(Alignment.TopCenter),
+                .align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text("Create a Task", style = MaterialTheme.typography.headlineMedium)
@@ -504,6 +504,7 @@ fun StatsScreen(stats: TaskStats, onBack: () -> Unit) {
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Spacer(modifier = Modifier.height(16.dp))
         Text("📈 Pooping Stats", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(16.dp))
         Text("Total Tasks Completed: ${stats.taskCount}")

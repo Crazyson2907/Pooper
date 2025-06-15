@@ -12,6 +12,8 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,29 +23,38 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -66,6 +77,7 @@ import com.task.pooper.PooperState.Stats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.core.content.edit
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,6 +134,14 @@ data class TaskStats(
     val taskCount: Int = 0,
     val totalMinutes: Int = 0,
     val completedTasks: List<String> = listOf()
+)
+
+data class OnboardingPage(
+    val imageRes: Int,
+    val title: String,
+    val subtitle: String,
+    val buttonText: AnnotatedString,
+    val secondaryButtonText: AnnotatedString? = null
 )
 
 @Dao
@@ -288,102 +308,235 @@ class PooperViewModelFactory(private val application: Application) : ViewModelPr
 
 @Composable
 fun PooperApp(viewModel: PooperViewModel) {
-    when (val currentState = viewModel.state.value) {
-        is PooperState.Onboarding -> OnboardingScreen {
-        viewModel.dispatch(PooperIntent.FinishOnboarding)
+    val context = LocalContext.current
+
+    if (!wasOnboardingShown(context)) {
+        OnboardingScreen {
+            markOnboardingShown(context)
+            viewModel.dispatch(PooperIntent.FinishOnboarding)
+        }
+    } else {
+        when (val currentState = viewModel.state.value) {
+            is PooperState.Onboarding -> OnboardingScreen {
+                viewModel.dispatch(PooperIntent.FinishOnboarding)
+            }
+
+            is PooperState.CreatingTask -> TaskCreationScreen(
+                onTaskCreated = { name, mins ->
+                    viewModel.dispatch(PooperIntent.CreateTask(name, mins))
+                },
+                onShowStats = {
+                    viewModel.dispatch(PooperIntent.ShowStats)
+                }
+            )
+
+            is PooperState.ActiveTask -> {
+                LaunchedEffect(currentState.task.remainingTime) {}
+                FocusTimerScreen(currentState.task.name, currentState.task.remainingTime) {
+                    if (currentState.task.remainingTime > 0) {
+                        viewModel.dispatch(PooperIntent.TaskFinished)
+                    }
+                }
+            }
+
+            is PooperState.OnBreak -> {
+                LaunchedEffect(currentState.remainingTime) {}
+                BreakScreen(
+                    remainingTime = currentState.remainingTime,
+                    returnToTask = currentState.returnToTask
+                ) { task ->
+                    if (task != null) {
+                        viewModel.dispatch(PooperIntent.EndBreakToTask(task))
+                    } else {
+                        viewModel.dispatch(PooperIntent.EndBreak)
+                    }
+                }
+            }
+
+            is PooperState.Stats -> StatsScreen(currentState.stats) {
+                viewModel.dispatch(PooperIntent.EndBreak)
+            }
+        }
     }
-        is PooperState.CreatingTask -> TaskCreationScreen(
-            onTaskCreated = { name, mins ->
-                viewModel.dispatch(PooperIntent.CreateTask(name, mins))
-            },
-            onShowStats = {
-                viewModel.dispatch(PooperIntent.ShowStats)
-            }
-        )
+}
 
-        is PooperState.ActiveTask -> {
-            LaunchedEffect(currentState.task.remainingTime) {}
-            FocusTimerScreen(currentState.task.name, currentState.task.remainingTime) {
-                if (currentState.task.remainingTime > 0) {
-                    viewModel.dispatch(PooperIntent.TaskFinished)
-                }
+const val PREFS_NAME = "pooper_prefs"
+const val KEY_ONBOARDING_SHOWN = "onboarding_shown"
+
+val onboardingPages = listOf(
+    OnboardingPage(
+        R.drawable.ic_logo,
+        "Welcome to POOPER 💩",
+        "Peak Operational Optimizer for Personal Efficiency Regulation",
+        buildAnnotatedString { append("Next") }
+    ),
+    OnboardingPage(
+        R.drawable.ic_logo,
+        "Focus Like a Champion 🧠",
+        "Create a task and start the countdown. No distractions!",
+        buildAnnotatedString { append("Next") }
+    ),
+    OnboardingPage(
+        R.drawable.ic_logo,
+        "Take a Break ☕",
+        "After each task, enjoy your sacred rest. You've earned it.",
+        buildAnnotatedString { append("Next") }
+    ),
+    OnboardingPage(
+        R.drawable.ic_logo,
+        "Track Your Stats 📊",
+        "Your completed tasks are saved. Poop proudly.",
+        getStrikethroughPoopText()
+    )
+)
+
+fun markOnboardingShown(context: Context) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit {
+            putBoolean(KEY_ONBOARDING_SHOWN, true)
+        }
+}
+
+fun wasOnboardingShown(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getBoolean(KEY_ONBOARDING_SHOWN, false)
+}
+
+@Composable
+fun OnboardingScreen(onFinish: () -> Unit) {
+    val pages = onboardingPages
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { pages.size })
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 160.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                OnboardingPageContent(page = pages[page])
             }
         }
 
-        is PooperState.OnBreak -> {
-            LaunchedEffect(currentState.remainingTime) {}
-            BreakScreen(
-                remainingTime = currentState.remainingTime,
-                returnToTask = currentState.returnToTask
-            ) { task ->
-                if (task != null) {
-                    viewModel.dispatch(PooperIntent.EndBreakToTask(task))
-                } else {
-                    viewModel.dispatch(PooperIntent.EndBreak)
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            DotsIndicator(
+                totalDots = pages.size,
+                selectedIndex = pagerState.currentPage
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = {
+                    if (pagerState.currentPage < pages.lastIndex) {
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                        }
+                    } else {
+                        markOnboardingShown(context)
+                        onFinish()
+                    }
+                },
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text(text = pages[pagerState.currentPage].buttonText)
+            }
+
+            pages[pagerState.currentPage].secondaryButtonText?.let { text ->
+                TextButton(onClick = {
+                    markOnboardingShown(context)
+                    onFinish()
+                }) {
+                    Text(text = text)
                 }
             }
-        }
-
-        is PooperState.Stats -> StatsScreen(currentState.stats) {
-            viewModel.dispatch(PooperIntent.EndBreak)
         }
     }
 }
 
 @Composable
-fun OnboardingScreen(onContinue: () -> Unit) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
-
-    AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
-        Column(
+fun OnboardingPageContent(page: OnboardingPage) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Image(
+            painter = painterResource(id = page.imageRes),
+            contentDescription = null,
             modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text("Welcome to POOPER!", style = MaterialTheme.typography.headlineLarge)
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "POOPER stands for: Peak Operational Optimizer for Personal Efficiency Regulation.",
-                style = MaterialTheme.typography.bodyLarge
+                .fillMaxWidth()
+                .height(260.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = page.title,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = page.subtitle,
+            fontSize = 16.sp,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+        )
+    }
+}
+
+@Composable
+fun DotsIndicator(totalDots: Int, selectedIndex: Int) {
+    Row(
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        repeat(totalDots) { index ->
+            val color = if (index == selectedIndex)
+                MaterialTheme.colorScheme.primary
+            else
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+
+            Box(
+                modifier = Modifier
+                    .padding(4.dp)
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(color)
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "This is not your average productivity app. Here’s how to use it:",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Column(modifier = Modifier.padding(8.dp)) {
-                listOf(
-                    "1. Create a task. Think of something you really need to focus on.",
-                    "2. Set how many minutes you want to work on it.",
-                    "3. Start the timer and DO NOT get distracted. Be the Pooper.",
-                    "4. When the timer ends, you’ll get a break. Enjoy it.",
-                    "5. Your completed tasks get tracked in the Pooping Stats."
-                ).forEach { Text(it, fontSize = 14.sp) }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "This app is scientifically unscientific and spiritually focused.",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Light
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onContinue, modifier = Modifier.clip(RoundedCornerShape(10.dp))) {
-                Text(
-                    buildAnnotatedString {
-                        append("Let’s ")
-                        withStyle(style = SpanStyle(textDecoration = TextDecoration.LineThrough)) {
-                            append("Poop")
-                        }
-                        append(" Work💩")
-                    },
-                    style = MaterialTheme.typography.bodyLarge
-                )
-            }
         }
+    }
+}
+
+fun getStrikethroughPoopText(): AnnotatedString {
+    return buildAnnotatedString {
+        append("Let’s ")
+        withStyle(style = SpanStyle(textDecoration = TextDecoration.LineThrough)) {
+            append("Poop")
+        }
+        append(" Work💩")
     }
 }
 

@@ -72,7 +72,23 @@ Logo generated with AI. Built with 💩 and Kotlin.
 
 ## 📸 Screenshot
 
-<img src="path/to/screenshot.png" width="300" />
+### Onboarding
+<img src="screenshots/onboarding.jpg" width="300"/>
+
+### Let's work
+<img src="screenshots/lets_poop.jpg" width="300"/>
+
+### Create task
+<img src="screenshots/create_task.jpg" width="300"/>
+
+### Stay focused
+<img src="screenshots/stay_focused.jpg" width="300"/>
+
+### Break time
+<img src="screenshots/break_screen.jpg" width="300"/>
+
+### Stats
+<img src="screenshots/stats.jpg" width="300"/>
 
 ---
 

@@ -90,6 +90,10 @@ Logo generated with AI. Built with 💩 and Kotlin.
 ### Stats
 <img src="screenshots/stats.jpg" width="300"/>
 
+## 📽 Demo
+
+[![Watch the demo](https://img.youtube.com/vi/YOUTUBE_VIDEO_ID/0.jpg)](https://youtu.be/L_EgzmkB54I?si=q4R7KBYfClEVueFB)
+
 ---
 
 ## 🔗 License
